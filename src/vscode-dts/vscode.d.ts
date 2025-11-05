@@ -17969,9 +17969,16 @@ declare module 'vscode' {
 		readonly id: string;
 
 		/**
-		 * The access token.
+		 * The access token. This token should be used to authenticate requests to a service. Popularized by OAuth.
+		 * @reference https://oauth.net/2/access-tokens/
 		 */
 		readonly accessToken: string;
+
+		/**
+		 * The ID token. This token contains identity information about the user. Popularized by OpenID Connect.
+		 * @reference https://openid.net/specs/openid-connect-core-1_0.html#IDToken
+		 */
+		readonly idToken?: string;
 
 		/**
 		 * The account associated with the session.
@@ -20970,9 +20977,11 @@ declare module 'vscode' {
 		 * 	}
 		 * ```
 		 *
-		 * When a new McpServerDefinitionProvider is available, the editor will present a 'refresh'
-		 * action to the user to discover new servers. To enable this flow, extensions should
-		 * call `registerMcpServerDefinitionProvider` during activation.
+		 * When a new McpServerDefinitionProvider is available, the editor will, by default,
+		 * automatically invoke it to discover new servers and tools when a chat message is
+		 * submitted. To enable this flow, extensions should call
+		 * `registerMcpServerDefinitionProvider` during activation.
+		 *
 		 * @param id The ID of the provider, which is unique to the extension.
 		 * @param provider The provider to register
 		 * @returns A disposable that unregisters the provider when disposed.

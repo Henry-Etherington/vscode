@@ -31,7 +31,7 @@ import { LinkedList } from '../../../../base/common/linkedList.js';
 import { ChatContextPickAttachment } from '../../chat/browser/chatContextPickService.js';
 
 export class McpResourcePickHelper extends Disposable {
-	private _resources = observableValue<Map<IMcpServer, (IMcpResourceTemplate | IMcpResource)[]>>(this, new Map());
+	private _resources = observableValue<{ picks: Map<IMcpServer, (IMcpResourceTemplate | IMcpResource)[]>; isBusy: boolean }>(this, { picks: new Map(), isBusy: false });
 	private _pickItemsStack: LinkedList<{ server: IMcpServer; resources: (IMcpResource | IMcpResourceTemplate)[] }> = new LinkedList();
 	private _inDirectory = observableValue<undefined | { server: IMcpServer; resources: (IMcpResource | IMcpResourceTemplate)[] }>(this, undefined);
 	public static sep(server: IMcpServer): IQuickPickSeparator {
@@ -43,7 +43,20 @@ export class McpResourcePickHelper extends Disposable {
 	}
 
 	public addCurrentMCPQuickPickItemLevel(server: IMcpServer, resources: (IMcpResource | IMcpResourceTemplate)[]): void {
-		this._pickItemsStack.push({ server, resources });
+		let isValidPush: boolean = false;
+		isValidPush = this._pickItemsStack.isEmpty();
+		if (!isValidPush) {
+			const stackedItem = this._pickItemsStack.peek();
+			if (stackedItem?.server === server && stackedItem.resources === resources) {
+				isValidPush = false;
+			} else {
+				isValidPush = true;
+			}
+		}
+		if (isValidPush) {
+			this._pickItemsStack.push({ server, resources });
+		}
+
 	}
 
 	public navigateBack(): boolean {
@@ -120,16 +133,16 @@ export class McpResourcePickHelper extends Disposable {
 
 			if (this._isDirectoryResource(resource) && (stat.children?.length ?? 0) > 0) {
 				// Save current state to stack before navigating
-				const currentResources = this._resources.get().get(server);
+				const currentResources = this._resources.get().picks.get(server);
 				if (currentResources) {
 					this.addCurrentMCPQuickPickItemLevel(server, currentResources);
 				}
 
 				// Convert all the children to IMcpResource objects
 				const childResources: IMcpResource[] = stat.children!.map(child => {
-					// const mcpUri = McpResourceURI.fromServer(server.definition, child.resource.toString());
+					const mcpUri = McpResourceURI.fromServer(server.definition, child.resource.toString());
 					return {
-						uri: child.resource,
+						uri: mcpUri,
 						mcpUri: child.resource.path,
 						name: child.name,
 						title: child.name,
@@ -148,17 +161,18 @@ export class McpResourcePickHelper extends Disposable {
 		return false;
 	}
 
-	public async toAttachment(resource: IMcpResource | IMcpResourceTemplate, server: IMcpServer): Promise<ChatContextPickAttachment> {
-		let attachmentResult: ChatContextPickAttachment;
-		//check if resource is pointing to a directory.
+	public toAttachment(resource: IMcpResource | IMcpResourceTemplate, server: IMcpServer): Promise<ChatContextPickAttachment> | 'noop' {
+		const noop = 'noop';
 		if (this._isDirectoryResource(resource)) {
-			attachmentResult = 'noop';
-		} else if (isMcpResourceTemplate(resource)) {
-			attachmentResult = await this._resourceTemplateToAttachment(resource) || 'noop';
-		} else {
-			attachmentResult = await this._resourceToAttachment(resource) || 'noop';
+			//Check if directory
+			this.checkIfDirectoryAndPopulate(resource, server);
+			return noop;
 		}
-		return attachmentResult;
+		if (isMcpResourceTemplate(resource)) {
+			return this._resourceTemplateToAttachment(resource).then(val => val || noop);
+		} else {
+			return this._resourceToAttachment(resource).then(val => val || noop);
+		}
 	}
 
 	public async checkIfDirectoryAndPopulate(resource: IMcpResource | IMcpResourceTemplate, server: IMcpServer): Promise<boolean> {
@@ -177,6 +191,8 @@ export class McpResourcePickHelper extends Disposable {
 			return resource.uri;
 		}
 	}
+
+	public checkIfNestedResources = () => !this._pickItemsStack.isEmpty();
 
 	private async _resourceToAttachment(resource: { uri: URI; name: string; mimeType?: string }): Promise<IChatRequestVariableEntry | undefined> {
 		const asImage = await this._chatAttachmentResolveService.resolveImageEditorAttachContext(resource.uri, undefined, resource.mimeType);
@@ -346,8 +362,9 @@ export class McpResourcePickHelper extends Disposable {
 		}
 	}
 
-	public getPicks(token?: CancellationToken): IObservable<Map<IMcpServer, (IMcpResourceTemplate | IMcpResource)[]>> {
+	public getPicks(token?: CancellationToken): IObservable<{ picks: Map<IMcpServer, (IMcpResourceTemplate | IMcpResource)[]>; isBusy: boolean }> {
 		const cts = new CancellationTokenSource(token);
+		let isBusyLoadingPicks = true;
 		this._register(toDisposable(() => cts.dispose(true)));
 		// We try to show everything in-sequence to avoid flickering (#250411) as long as
 		// it loads within 5 seconds. Otherwise we just show things as the load in parallel.
@@ -373,10 +390,7 @@ export class McpResourcePickHelper extends Disposable {
 					break;
 				}
 			}
-
-			if (this._inDirectory.get() === undefined) {
-				this._resources.set(output, undefined);
-			}
+			this._resources.set({ picks: output, isBusy: isBusyLoadingPicks }, undefined);
 		};
 
 		type Rec = { templates: DeferredPromise<IMcpResourceTemplate[]>; resourcesSoFar: IMcpResource[]; resources: DeferredPromise<unknown> };
@@ -423,14 +437,16 @@ export class McpResourcePickHelper extends Disposable {
 				rec.templates.complete([]);
 				rec.resources.complete([]);
 			}
+		})).finally(() => {
+			isBusyLoadingPicks = false;
 			publish();
-		}));
+		});
 
 		// Use derived to compute the appropriate resource map based on directory navigation state
 		return derived(this, reader => {
 			const directoryResource = this._inDirectory.read(reader);
 			return directoryResource
-				? new Map([[directoryResource.server, directoryResource.resources]])
+				? { picks: new Map([[directoryResource.server, directoryResource.resources]]), isBusy: false }
 				: this._resources.read(reader);
 		});
 	}
@@ -451,6 +467,7 @@ export abstract class AbstractMcpResourceAccessPick {
 		picker.busy = true;
 		picker.keepScrollPosition = true;
 		const store = new DisposableStore();
+		const goBackId = '_goback_';
 
 		type ResourceQuickPickItem = IQuickPickItem & { resource: IMcpResource | IMcpResourceTemplate; server: IMcpServer };
 
@@ -462,9 +479,10 @@ export abstract class AbstractMcpResourceAccessPick {
 		}
 		const picksObservable = helper.getPicks(token);
 		store.add(autorun(reader => {
-			const servers = picksObservable.read(reader);
-			const items: (ResourceQuickPickItem | IQuickPickSeparator)[] = [];
-			for (const [server, resources] of servers) {
+			const pickItems = picksObservable.read(reader);
+			const isBusy = pickItems.isBusy;
+			const items: (ResourceQuickPickItem | IQuickPickSeparator | IQuickPickItem)[] = [];
+			for (const [server, resources] of pickItems.picks) {
 				items.push(McpResourcePickHelper.sep(server));
 				for (const resource of resources) {
 					const pickItem = McpResourcePickHelper.item(resource);
@@ -472,33 +490,53 @@ export abstract class AbstractMcpResourceAccessPick {
 					items.push({ ...pickItem, resource, server });
 				}
 			}
+			if (helper.checkIfNestedResources()) {
+				// Add go back item
+				const goBackItem: IQuickPickItem = {
+					id: goBackId,
+					label: localize('goBack', 'Go back ↩'),
+					alwaysShow: true
+				};
+				items.push(goBackItem);
+			}
 			picker.items = items;
-			picker.busy = false;
+			picker.busy = isBusy;
 		}));
 
 		store.add(picker.onDidTriggerItemButton(event => {
 			if (event.button.tooltip === attachButton) {
 				picker.busy = true;
 				const resourceItem = event.item as ResourceQuickPickItem;
-				helper.toAttachment(resourceItem.resource, resourceItem.server).then(async a => {
-					if (a !== 'noop') {
-						const widget = await openPanelChatAndGetWidget(this._viewsService, this._chatWidgetService);
-						widget?.attachmentModel.addContext(a);
-					}
-					picker.hide();
-				});
+				const attachment = helper.toAttachment(resourceItem.resource, resourceItem.server);
+				if (attachment instanceof Promise) {
+					attachment.then(async a => {
+						if (a !== 'noop') {
+							const widget = await openPanelChatAndGetWidget(this._viewsService, this._chatWidgetService);
+							widget?.attachmentModel.addContext(a);
+						}
+						picker.hide();
+					});
+				}
 			}
 		}));
 
 		store.add(picker.onDidHide(() => {
 			helper.dispose();
-			store.dispose();
 		}));
 
-		picker.onDidAccept(async event => {
+		store.add(picker.onDidAccept(async event => {
 			try {
 				picker.busy = true;
 				const [item] = picker.selectedItems;
+
+				// Check if go back item was selected
+				if (item.id === goBackId) {
+					helper.navigateBack();
+					picker.show();
+					picker.busy = false;
+					return;
+				}
+
 				const resourceItem = item as ResourceQuickPickItem;
 				const resource = resourceItem.resource;
 				let uri: URI | undefined;
@@ -518,8 +556,8 @@ export abstract class AbstractMcpResourceAccessPick {
 			} finally {
 				picker.busy = false;
 			}
-		});
-		return Disposable.None;
+		}));
+		return store;
 	}
 }
 
@@ -530,8 +568,6 @@ export class McpResourceQuickPick extends AbstractMcpResourceAccessPick {
 		@IEditorService editorService: IEditorService,
 		@IChatWidgetService chatWidgetService: IChatWidgetService,
 		@IViewsService viewsService: IViewsService,
-		@IFileService fileService: IFileService,
-		@INotificationService notificationService: INotificationService,
 		@IQuickInputService private readonly _quickInputService: IQuickInputService,
 	) {
 		super(scopeTo, instantiationService, editorService, chatWidgetService, viewsService);
@@ -557,9 +593,7 @@ export class McpResourceQuickAccess extends AbstractMcpResourceAccessPick implem
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IEditorService editorService: IEditorService,
 		@IChatWidgetService chatWidgetService: IChatWidgetService,
-		@IViewsService viewsService: IViewsService,
-		@IFileService fileService: IFileService,
-		@INotificationService notificationService: INotificationService,
+		@IViewsService viewsService: IViewsService
 	) {
 		super(undefined, instantiationService, editorService, chatWidgetService, viewsService);
 	}

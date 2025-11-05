@@ -5,7 +5,6 @@
 
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../base/common/codicons.js';
-import { CancellationError } from '../../../../base/common/errors.js';
 import { Disposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { autorun, derived } from '../../../../base/common/observable.js';
 import { localize } from '../../../../nls.js';
@@ -77,41 +76,26 @@ export class McpAddContextContribution extends Disposable implements IWorkbenchC
 		const picksObservable = helper.getPicks(token);
 
 		return derived(this, reader => {
-			const servers = picksObservable.read(reader);
+
+			const pickItems = picksObservable.read(reader);
 			const picks: ChatContextPick[] = [];
-
-			for (const [server, resources] of servers) {
-				if (resources.length === 0) {
-					continue;
+			try {
+				for (const [server, resources] of pickItems.picks) {
+					if (resources.length === 0) {
+						continue;
+					}
+					picks.push(McpResourcePickHelper.sep(server));
+					for (const resource of resources) {
+						picks.push({
+							...McpResourcePickHelper.item(resource),
+							asAttachment: () => helper.toAttachment(resource, server)
+						});
+					}
 				}
-
-				picks.push(McpResourcePickHelper.sep(server));
-				for (const resource of resources) {
-					picks.push({
-						...McpResourcePickHelper.item(resource),
-						validateForAttachment: async (): Promise<boolean> => {
-							if (helper.checkIfDirectoryAndPopulate) {
-								const val = await helper.checkIfDirectoryAndPopulate(resource, server);
-								if (val === true) {
-									helper.addCurrentMCPQuickPickItemLevel(server, resources);
-								} else {
-									return false;
-								}
-							}
-							return Promise.resolve(true);
-						},
-						asAttachment: () => helper.toAttachment(resource, server).then(r => {
-							if (!r) {
-								throw new CancellationError();
-							} else {
-								return r;
-							}
-						}),
-					});
-				}
+				return { picks, busy: pickItems.isBusy };
+			} catch {
+				return { picks, busy: false };
 			}
-
-			return { picks, busy: false };
 		});
 	}
 }
