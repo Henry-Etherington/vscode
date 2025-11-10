@@ -38,6 +38,7 @@ import { IEditorService } from '../../../../services/editor/common/editorService
 import { IWorkbenchLayoutService } from '../../../../services/layout/browser/layoutService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { ExplorerFolderContext } from '../../../files/common/files.js';
+import { CTX_INLINE_CHAT_V2_ENABLED } from '../../../inlineChat/common/inlineChat.js';
 import { AnythingQuickAccessProvider } from '../../../search/browser/anythingQuickAccess.js';
 import { isSearchTreeFileMatch, isSearchTreeMatch } from '../../../search/browser/searchTreeModel/searchTreeCommon.js';
 import { ISymbolQuickPickItem, SymbolsQuickAccessProvider } from '../../../search/browser/symbolsQuickAccess.js';
@@ -406,7 +407,10 @@ export class AttachContextAction extends Action2 {
 			},
 			menu: {
 				when: ContextKeyExpr.and(
-					ChatContextKeys.location.isEqualTo(ChatAgentLocation.Chat),
+					ContextKeyExpr.or(
+						ChatContextKeys.location.isEqualTo(ChatAgentLocation.Chat),
+						ContextKeyExpr.and(ChatContextKeys.location.isEqualTo(ChatAgentLocation.EditorInline), CTX_INLINE_CHAT_V2_ENABLED)
+					),
 					ContextKeyExpr.or(
 						ChatContextKeys.lockedToCodingAgent.negate(),
 						ChatContextKeys.agentSupportsAttachments
@@ -416,6 +420,7 @@ export class AttachContextAction extends Action2 {
 				group: 'navigation',
 				order: 3
 			},
+
 		});
 	}
 
@@ -629,23 +634,37 @@ export class AttachContextAction extends Action2 {
 		}
 
 		if (cts.token.isCancellationRequested) {
+			pickerConfig.dispose?.();
 			return true; // picker got hidden already
 		}
 
 		const defer = new DeferredPromise<boolean>();
 		const addPromises: Promise<void>[] = [];
 
-		store.add(qp.onDidAccept(e => {
+		store.add(qp.onDidAccept(async e => {
+			const noop = 'noop';
 			const [selected] = qp.selectedItems;
 			if (isChatContextPickerPickItem(selected)) {
 				const attachment = selected.asAttachment();
+				if (!attachment || attachment === noop) {
+					return;
+				}
 				if (isThenable(attachment)) {
-					addPromises.push(attachment.then(v => widget.attachmentModel.addContext(v)));
+					addPromises.push(attachment.then(v => {
+						if (v !== noop) {
+							widget.attachmentModel.addContext(v);
+						}
+					}));
 				} else {
 					widget.attachmentModel.addContext(attachment);
 				}
 			}
 			if (selected === goBackItem) {
+				if (pickerConfig.goBack?.()) {
+					// Custom goBack handled the navigation, stay in the picker
+					return; // Don't complete, keep picker open
+				}
+				// Default behavior: go back to main picker
 				defer.complete(false);
 			}
 			if (selected === configureItem) {
@@ -659,6 +678,7 @@ export class AttachContextAction extends Action2 {
 
 		store.add(qp.onDidHide(() => {
 			defer.complete(true);
+			pickerConfig.dispose?.();
 		}));
 
 		try {

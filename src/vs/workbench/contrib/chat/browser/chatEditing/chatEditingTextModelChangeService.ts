@@ -31,6 +31,7 @@ import { editorSelectionBackground } from '../../../../../platform/theme/common/
 import { ICellEditOperation } from '../../../notebook/common/notebookCommon.js';
 import { ModifiedFileEntryState } from '../../common/chatEditingService.js';
 import { IChatResponseModel } from '../../common/chatModel.js';
+import { ChatAgentLocation } from '../../common/constants.js';
 import { IDocumentDiff2 } from './chatEditingCodeEditorIntegration.js';
 import { pendingRewriteMinimap } from './chatEditingModifiedFileEntry.js';
 
@@ -78,6 +79,7 @@ export class ChatEditingTextModelChangeService extends Disposable {
 	public get allEditsAreFromUs() {
 		return this._allEditsAreFromUs;
 	}
+	private _isExternalEditInProgress: (() => boolean) | undefined;
 	private _diffOperation: Promise<IDocumentDiff | undefined> | undefined;
 	private _diffOperationIds: number = 0;
 
@@ -123,10 +125,12 @@ export class ChatEditingTextModelChangeService extends Disposable {
 		private readonly originalModel: ITextModel,
 		private readonly modifiedModel: ITextModel,
 		private readonly state: IObservable<ModifiedFileEntryState>,
+		isExternalEditInProgress: (() => boolean) | undefined,
 		@IEditorWorkerService private readonly _editorWorkerService: IEditorWorkerService,
 		@IAccessibilitySignalService private readonly _accessibilitySignalService: IAccessibilitySignalService,
 	) {
 		super();
+		this._isExternalEditInProgress = isExternalEditInProgress;
 		this._register(this.modifiedModel.onDidChangeContent(e => {
 			this._mirrorEdits(e);
 		}));
@@ -136,6 +140,10 @@ export class ChatEditingTextModelChangeService extends Disposable {
 		}));
 
 		this._register(autorun(r => this.updateLineChangeCount(this._diffInfo.read(r))));
+
+		if (!originalModel.equalsTextBuffer(modifiedModel.getTextBuffer())) {
+			this._updateDiffInfoSeq();
+		}
 	}
 
 	private updateLineChangeCount(diff: IDocumentDiff) {
@@ -154,7 +162,9 @@ export class ChatEditingTextModelChangeService extends Disposable {
 	}
 
 	public clearCurrentEditLineDecoration() {
-		this._editDecorations = this.modifiedModel.deltaDecorations(this._editDecorations, []);
+		if (!this.modifiedModel.isDisposed()) {
+			this._editDecorations = this.modifiedModel.deltaDecorations(this._editDecorations, []);
+		}
 	}
 
 	public async areOriginalAndModifiedIdentical(): Promise<boolean> {
@@ -171,26 +181,7 @@ export class ChatEditingTextModelChangeService extends Disposable {
 		let maxLineNumber = 0;
 		let rewriteRatio = 0;
 
-		let source: TextModelEditSource;
-		if (responseModel) {
-			const sessionId = responseModel.session.sessionId;
-			const request = responseModel.session.getRequests().at(-1);
-			const languageId = this.modifiedModel.getLanguageId();
-			const agent = responseModel.agent;
-			const extensionId = VersionedExtensionId.tryCreate(agent?.extensionId.value, agent?.extensionVersion);
-
-			source = EditSources.chatApplyEdits({
-				modelId: request?.modelId,
-				requestId: request?.id,
-				sessionId: sessionId,
-				languageId,
-				mode: request?.modeInfo?.modeId,
-				extensionId,
-				codeBlockSuggestionId: request?.modeInfo?.applyCodeBlockSuggestionId,
-			});
-		} else {
-			source = EditSources.unknown({ name: 'editSessionUndoRedo' });
-		}
+		const source = this._createEditSource(responseModel);
 
 		if (isAtomicEdits) {
 			// EDIT and DONE
@@ -263,7 +254,46 @@ export class ChatEditingTextModelChangeService extends Disposable {
 		return { rewriteRatio, maxLineNumber };
 	}
 
+	private _createEditSource(responseModel: IChatResponseModel | undefined) {
+
+		if (!responseModel) {
+			return EditSources.unknown({ name: 'editSessionUndoRedo' });
+		}
+
+		const sessionId = responseModel.session.sessionId;
+		const request = responseModel.session.getRequests().at(-1);
+		const languageId = this.modifiedModel.getLanguageId();
+		const agent = responseModel.agent;
+		const extensionId = VersionedExtensionId.tryCreate(agent?.extensionId.value, agent?.extensionVersion);
+
+		if (responseModel.request?.locationData?.type === ChatAgentLocation.EditorInline) {
+
+			return EditSources.inlineChatApplyEdit({
+				modelId: request?.modelId,
+				requestId: request?.id,
+				sessionId,
+				languageId,
+				extensionId,
+			});
+		}
+
+		return EditSources.chatApplyEdits({
+			modelId: request?.modelId,
+			requestId: request?.id,
+			sessionId,
+			languageId,
+			mode: request?.modeInfo?.modeId,
+			extensionId,
+			codeBlockSuggestionId: request?.modeInfo?.applyCodeBlockSuggestionId,
+		});
+	}
+
 	private _applyEdits(edits: ISingleEditOperation[], source: TextModelEditSource) {
+
+		if (edits.length === 0) {
+			return [];
+		}
+
 		try {
 			this._isEditFromUs = true;
 			// make the actual edit
@@ -326,11 +356,15 @@ export class ChatEditingTextModelChangeService extends Disposable {
 
 	private _mirrorEdits(event: IModelContentChangedEvent) {
 		const edit = offsetEditFromContentChanges(event.changes);
+		const isExternalEdit = this._isExternalEditInProgress?.();
 
-		if (this._isEditFromUs) {
+		if (this._isEditFromUs || isExternalEdit) {
 			const e_sum = this._originalToModifiedEdit;
 			const e_ai = edit;
 			this._originalToModifiedEdit = e_sum.compose(e_ai);
+			if (isExternalEdit) {
+				this._updateDiffInfoSeq();
+			}
 		} else {
 
 			//           e_ai

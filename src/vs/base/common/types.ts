@@ -327,6 +327,23 @@ export type Mutable<T> = {
 };
 
 /**
+ * A type that adds readonly to all properties of T, recursively.
+ */
+export type DeepImmutable<T> = T extends (infer U)[]
+	? ReadonlyArray<DeepImmutable<U>>
+	: T extends ReadonlyArray<infer U>
+	? ReadonlyArray<DeepImmutable<U>>
+	: T extends Map<infer K, infer V>
+	? ReadonlyMap<K, DeepImmutable<V>>
+	: T extends Set<infer U>
+	? ReadonlySet<DeepImmutable<U>>
+	: T extends object
+	? {
+		readonly [K in keyof T]: DeepImmutable<T[K]>;
+	}
+	: T;
+
+/**
  * A single object or an array of the objects.
  */
 export type SingleOrMany<T> = T | T[];
@@ -355,7 +372,7 @@ export type PartialExcept<T, K extends keyof T> = Partial<Omit<T, K>> & Pick<T, 
 
 type KeysOfUnionType<T> = T extends T ? keyof T : never;
 type FilterType<T, TTest> = T extends TTest ? T : never;
-type MakeOptionalAndBool<T extends object> = { [K in keyof T]?: boolean };
+type MakeOptionalAndTrue<T extends object> = { [K in keyof T]?: true };
 
 /**
  * Type guard that checks if an object has specific keys and narrows the type accordingly.
@@ -376,7 +393,7 @@ type MakeOptionalAndBool<T extends object> = { [K in keyof T]?: boolean };
  * }
  * ```
  */
-export function hasKey<T extends object, TKeys>(x: T, key: TKeys & MakeOptionalAndBool<T>): x is FilterType<T, { [K in KeysOfUnionType<T> & keyof TKeys]: unknown }> {
+export function hasKey<T extends object, TKeys extends MakeOptionalAndTrue<T>>(x: T, key: TKeys): x is FilterType<T, { [K in KeysOfUnionType<T> & keyof TKeys]: unknown }> {
 	for (const k in key) {
 		if (!(k in x)) {
 			return false;

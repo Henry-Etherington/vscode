@@ -93,6 +93,7 @@ import type { IProgressState } from '@xterm/addon-progress';
 import { refreshShellIntegrationInfoStatus } from './terminalTooltip.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { PromptInputState } from '../../../../platform/terminal/common/capabilities/commandDetection/promptInputModel.js';
+import { hasKey } from '../../../../base/common/types.js';
 
 const enum Constants {
 	/**
@@ -481,6 +482,15 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 						e.capability.promptInputModel.onDidChangeInput,
 						e.capability.promptInputModel.onDidFinishInput
 					)(refreshInfo));
+					this._register(e.capability.onCommandExecuted(async (command) => {
+						// Only generate ID if command doesn't already have one (i.e., it's a manual command, not Copilot-initiated)
+						// The tool terminal sets the command ID before command start, so this won't override it
+						if (!command.id && command.command) {
+							const commandId = generateUuid();
+							this.xterm?.shellIntegration.setNextCommandId(command.command, commandId);
+							await this._processManager.setNextCommandId(command.command, commandId);
+						}
+					}));
 					break;
 				}
 				case TerminalCapability.PromptTypeDetection: {
@@ -636,13 +646,6 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 			this._register(this.onDisposed(() => {
 				contribution.dispose();
 				this._contributions.delete(desc.id);
-				// Just in case to prevent potential future memory leaks due to cyclic dependency.
-				if ('instance' in contribution) {
-					delete contribution.instance;
-				}
-				if ('_instance' in contribution) {
-					delete contribution._instance;
-				}
 			}));
 		}
 	}
@@ -904,6 +907,10 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 			}));
 		}
 
+		if (this.xterm?.shellIntegration) {
+			this.capabilities.add(this.xterm.shellIntegration.capabilities);
+		}
+
 		this._pathService.userHome().then(userHome => {
 			this._userHome = userHome.fsPath;
 		});
@@ -915,7 +922,7 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 		return xterm;
 	}
 
-	async runCommand(commandLine: string, shouldExecute: boolean): Promise<void> {
+	async runCommand(commandLine: string, shouldExecute: boolean, commandId?: string): Promise<void> {
 		let commandDetection = this.capabilities.get(TerminalCapability.CommandDetection);
 		const siInjectionEnabled = this._configurationService.getValue(TerminalSettingId.ShellIntegrationEnabled) === true;
 		const timeoutMs = getShellIntegrationTimeout(
@@ -944,6 +951,13 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 				timeout(timeoutMs)
 			]);
 			store.dispose();
+		}
+
+		// If a command ID was provided and we have command detection, set it as the next command ID
+		// so it will be used when the shell sends the command start sequence
+		if (commandId && commandDetection) {
+			this.xterm?.shellIntegration.setNextCommandId(commandLine, commandId);
+			await this._processManager.setNextCommandId(commandLine, commandId);
 		}
 
 		// Determine whether to send ETX (ctrl+c) before running the command. This should always
@@ -1536,18 +1550,15 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 		const originalIcon = this.shellLaunchConfig.icon;
 		await this._processManager.createProcess(this._shellLaunchConfig, this._cols || Constants.DefaultCols, this._rows || Constants.DefaultRows).then(result => {
 			if (result) {
-				if ('message' in result) {
+				if (hasKey(result, { message: true })) {
 					this._onProcessExit(result);
-				} else if ('injectedArgs' in result) {
+				} else if (hasKey(result, { injectedArgs: true })) {
 					this._injectedArgs = result.injectedArgs;
 				}
 			}
 		});
 		if (this.isDisposed) {
 			return;
-		}
-		if (this.xterm?.shellIntegration) {
-			this.capabilities.add(this.xterm.shellIntegration.capabilities);
 		}
 		if (originalIcon !== this.shellLaunchConfig.icon || this.shellLaunchConfig.color) {
 			this._icon = this._shellLaunchConfig.attachPersistentProcess?.icon || this._shellLaunchConfig.icon;
@@ -1815,9 +1826,9 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 		this._shellLaunchConfig = shell; // Must be done before calling _createProcess()
 		await this._processManager.relaunch(this._shellLaunchConfig, this._cols || Constants.DefaultCols, this._rows || Constants.DefaultRows, reset).then(result => {
 			if (result) {
-				if ('message' in result) {
+				if (hasKey(result, { message: true })) {
 					this._onProcessExit(result);
-				} else if ('injectedArgs' in result) {
+				} else if (hasKey(result, { injectedArgs: true })) {
 					this._injectedArgs = result.injectedArgs;
 				}
 			}

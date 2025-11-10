@@ -36,13 +36,10 @@ import { ICommandService } from '../../../../../platform/commands/common/command
 import { findExistingChatEditorByUri, getSessionItemContextOverlay, NEW_CHAT_SESSION_ACTION_ID } from '../chatSessions/common.js';
 import { ACTION_ID_OPEN_CHAT } from '../actions/chatActions.js';
 import { IProgressService } from '../../../../../platform/progress/common/progress.js';
-import { ChatSessionUri } from '../../common/chatUri.js';
 import { IChatEditorOptions } from '../chatEditor.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
-import { ChatEditorInput } from '../chatEditorInput.js';
 import { assertReturnsDefined, upcast } from '../../../../../base/common/types.js';
 import { IEditorGroupsService } from '../../../../services/editor/common/editorGroupsService.js';
-import { URI } from '../../../../../base/common/uri.js';
 import { DeferredPromise } from '../../../../../base/common/async.js';
 import { Event } from '../../../../../base/common/event.js';
 import { MutableDisposable } from '../../../../../base/common/lifecycle.js';
@@ -52,6 +49,8 @@ import { MarshalledId } from '../../../../../base/common/marshallingIds.js';
 import { getActionBarActions } from '../../../../../platform/actions/browser/menuEntryActionViewItem.js';
 import { IChatService } from '../../common/chatService.js';
 import { IChatWidgetService } from '../chat.js';
+import { AGENT_SESSIONS_VIEW_ID, AGENT_SESSIONS_VIEW_CONTAINER_ID, AgentSessionProviders } from './agentSessions.js';
+import { TreeFindMode } from '../../../../../base/browser/ui/tree/abstractTree.js';
 
 export class AgentSessionsView extends ViewPane {
 
@@ -133,37 +132,23 @@ export class AgentSessionsView extends ViewPane {
 			return;
 		}
 
-		if (session.resource.scheme !== ChatSessionUri.scheme) {
-			await this.openerService.open(session.resource, {
-				editorOptions: upcast<IEditorOptions, IChatEditorOptions>({
-					...e.editorOptions,
-					title: { preferred: session.label }
-				})
-			});
-			return;
-		}
-
-		const uri = ChatSessionUri.forSession(session.provider.chatSessionType, session.id);
-		const existingSessionEditor = findExistingChatEditorByUri(uri, session.id, this.editorGroupsService);
+		const existingSessionEditor = findExistingChatEditorByUri(session.resource, this.editorGroupsService);
 		if (existingSessionEditor) {
-			await this.editorGroupsService.getGroup(existingSessionEditor.groupId)?.openEditor(existingSessionEditor.editor, e.editorOptions);
+			await existingSessionEditor.group.openEditor(existingSessionEditor.editor, e.editorOptions);
 			return;
 		}
 
-		let sessionResource: URI;
 		let sessionOptions: IChatEditorOptions;
 		if (isLocalAgentSessionItem(session)) {
-			sessionResource = ChatEditorInput.getNewEditorUri();
-			sessionOptions = { target: { sessionId: session.id } };
+			sessionOptions = {};
 		} else {
-			sessionResource = ChatSessionUri.forSession(session.provider.chatSessionType, session.id);
 			sessionOptions = { title: { preferred: session.label } };
 		}
 
 		sessionOptions.ignoreInView = true;
 
 		await this.editorService.openEditor({
-			resource: sessionResource,
+			resource: session.resource,
 			options: upcast<IEditorOptions, IChatEditorOptions>({
 				...sessionOptions,
 				title: { preferred: session.label },
@@ -178,7 +163,10 @@ export class AgentSessionsView extends ViewPane {
 		}
 
 		const menu = this.menuService.createMenu(MenuId.ChatSessionsMenu, this.contextKeyService.createOverlay(getSessionItemContextOverlay(
-			session,
+			{
+				id: session.resource.toString(),
+				...session
+			},
 			session.provider,
 			this.chatWidgetService,
 			this.chatService,
@@ -245,12 +233,6 @@ export class AgentSessionsView extends ViewPane {
 	private createNewSessionButton(container: HTMLElement): void {
 		this.newSessionContainer = append(container, $('.agent-sessions-new-session-container'));
 
-		const primaryAction = toAction({
-			id: 'agentSessions.newSession.primary',
-			label: localize('agentSessions.newSession', "New Session"),
-			run: () => this.commandService.executeCommand(ACTION_ID_OPEN_CHAT)
-		});
-
 		const newSessionButton = this._register(new ButtonWithDropdown(this.newSessionContainer, {
 			title: localize('agentSessions.newSession', "New Session"),
 			ariaLabel: localize('agentSessions.newSessionAriaLabel', "New Session"),
@@ -266,31 +248,63 @@ export class AgentSessionsView extends ViewPane {
 
 		newSessionButton.label = localize('agentSessions.newSession', "New Session");
 
-		this._register(newSessionButton.onDidClick(() => primaryAction.run()));
+		this._register(newSessionButton.onDidClick(() => this.commandService.executeCommand(ACTION_ID_OPEN_CHAT)));
 	}
 
 	private getNewSessionActions(): IAction[] {
 		const actions: IAction[] = [];
+
+		// Default action
+		actions.push(toAction({
+			id: 'newChatSession.default',
+			label: localize('newChatSessionDefault', "New Local Session"),
+			run: () => this.commandService.executeCommand(ACTION_ID_OPEN_CHAT)
+		}));
+
+		// Background (CLI)
+		actions.push(toAction({
+			id: 'newChatSessionFromProvider.background',
+			label: localize('newBackgroundSession', "New Background Session"),
+			run: () => this.commandService.executeCommand(`${NEW_CHAT_SESSION_ACTION_ID}.${AgentSessionProviders.Background}`)
+		}));
+
+		// Cloud
+		actions.push(toAction({
+			id: 'newChatSessionFromProvider.cloud',
+			label: localize('newCloudSession', "New Cloud Session"),
+			run: () => this.commandService.executeCommand(`${NEW_CHAT_SESSION_ACTION_ID}.${AgentSessionProviders.Cloud}`)
+		}));
+
+		let addedSeparator = false;
 		for (const provider of this.chatSessionsService.getAllChatSessionContributions()) {
+			if (provider.type === AgentSessionProviders.Background || provider.type === AgentSessionProviders.Cloud) {
+				continue; // already added above
+			}
 
-			// Generic action to create new provider specific session
-			actions.push(toAction({
-				id: `newChatSessionFromProvider.${provider.type}`,
-				label: localize('newChatSessionFromProvider', "New {0}", provider.displayName),
-				run: () => this.commandService.executeCommand(`${NEW_CHAT_SESSION_ACTION_ID}.${provider.type}`)
-			}));
+			if (!addedSeparator) {
+				actions.push(new Separator());
+				addedSeparator = true;
+			}
 
-			// Collect provider specific additional actions
-			const menu = this.menuService.createMenu(MenuId.ChatSessionsMenu, this.scopedContextKeyService.createOverlay([[ChatContextKeys.sessionType.key, provider.type]]));
-			const primaryActions = getActionBarActions(
-				menu.getActions({ shouldForwardArgs: true }),
-				'submenu',
-			).primary;
+			const menuActions = this.menuService.getMenuActions(MenuId.ChatSessionsCreateSubMenu, this.scopedContextKeyService.createOverlay([
+				[ChatContextKeys.sessionType.key, provider.type]
+			]));
+
+			const primaryActions = getActionBarActions(menuActions, () => true).primary;
+
+			// Prefer provider creation actions...
 			if (primaryActions.length > 0) {
 				actions.push(...primaryActions);
-				actions.push(new Separator());
 			}
-			menu.dispose();
+
+			// ...over our generic one
+			else {
+				actions.push(toAction({
+					id: `newChatSessionFromProvider.${provider.type}`,
+					label: localize('newChatSessionFromProvider', "New {0}", provider.displayName),
+					run: () => this.commandService.executeCommand(`${NEW_CHAT_SESSION_ACTION_ID}.${provider.type}`)
+				}));
+			}
 		}
 
 		// Install more
@@ -330,6 +344,7 @@ export class AgentSessionsView extends ViewPane {
 				horizontalScrolling: false,
 				multipleSelectionSupport: false,
 				findWidgetEnabled: true,
+				defaultFindMode: TreeFindMode.Filter,
 				keyboardNavigationLabelProvider: new AgentSessionsKeyboardNavigationLabelProvider(),
 				sorter: new AgentSessionsSorter(),
 				paddingBottom: AgentSessionsListDelegate.ITEM_HEIGHT
@@ -387,8 +402,6 @@ export class AgentSessionsView extends ViewPane {
 
 const chatAgentsIcon = registerIcon('chat-sessions-icon', Codicon.commentDiscussionSparkle, 'Icon for Agent Sessions View');
 
-const AGENT_SESSIONS_VIEW_CONTAINER_ID = 'workbench.viewContainer.agentSessions';
-const AGENT_SESSIONS_VIEW_ID = 'workbench.view.agentSessions';
 const AGENT_SESSIONS_VIEW_TITLE = localize2('agentSessions.view.label', "Agent Sessions");
 
 const agentSessionsViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({

@@ -192,6 +192,7 @@ export class ActionButtonRenderer implements ICompressibleTreeRenderer<ISCMActio
 
 	renderTemplate(container: HTMLElement): ActionButtonTemplate {
 		// hack
+		// eslint-disable-next-line no-restricted-syntax
 		(container.parentElement!.parentElement!.querySelector('.monaco-tl-twistie')! as HTMLElement).classList.add('force-no-twistie');
 
 		// Use default cursor & disable hover for list item
@@ -316,6 +317,7 @@ class InputRenderer implements ICompressibleTreeRenderer<ISCMInput, FuzzyScore, 
 
 	renderTemplate(container: HTMLElement): InputTemplate {
 		// hack
+		// eslint-disable-next-line no-restricted-syntax
 		(container.parentElement!.parentElement!.querySelector('.monaco-tl-twistie')! as HTMLElement).classList.add('force-no-twistie');
 
 		// Disable hover for list item
@@ -448,6 +450,7 @@ class ResourceGroupRenderer implements ICompressibleTreeRenderer<ISCMResourceGro
 
 	renderTemplate(container: HTMLElement): ResourceGroupTemplate {
 		// hack
+		// eslint-disable-next-line no-restricted-syntax
 		(container.parentElement!.parentElement!.querySelector('.monaco-tl-twistie')! as HTMLElement).classList.add('force-twistie');
 
 		const element = append(container, $('.resource-group'));
@@ -986,6 +989,7 @@ export const ContextKeys = {
 	SCMHistoryItemCount: new RawContextKey<number>('scmHistoryItemCount', 0),
 	SCMHistoryViewMode: new RawContextKey<ViewMode>('scmHistoryViewMode', ViewMode.List),
 	SCMCurrentHistoryItemRefHasRemote: new RawContextKey<boolean>('scmCurrentHistoryItemRefHasRemote', false),
+	SCMCurrentHistoryItemRefHasBase: new RawContextKey<boolean>('scmCurrentHistoryItemRefHasBase', false),
 	SCMCurrentHistoryItemRefInFilter: new RawContextKey<boolean>('scmCurrentHistoryItemRefInFilter', false),
 	RepositoryCount: new RawContextKey<number>('scmRepositoryCount', 0),
 	RepositoryVisibilityCount: new RawContextKey<number>('scmRepositoryVisibleCount', 0),
@@ -1155,12 +1159,11 @@ class SetTreeViewModeAction extends ViewAction<SCMViewPane> {
 registerAction2(SetListViewModeAction);
 registerAction2(SetTreeViewModeAction);
 
-abstract class RepositorySortAction extends ViewAction<SCMViewPane> {
+abstract class RepositorySortAction extends Action2 {
 	constructor(private sortKey: ISCMRepositorySortKey, title: string) {
 		super({
 			id: `workbench.scm.action.repositories.setSortKey.${sortKey}`,
 			title,
-			viewId: VIEW_PANE_ID,
 			f1: false,
 			toggled: RepositoryContextKeys.RepositorySortKey.isEqualTo(sortKey),
 			menu: [
@@ -1176,7 +1179,7 @@ abstract class RepositorySortAction extends ViewAction<SCMViewPane> {
 		});
 	}
 
-	runInView(accessor: ServicesAccessor) {
+	run(accessor: ServicesAccessor) {
 		accessor.get(ISCMViewService).toggleSortKey(this.sortKey);
 	}
 }
@@ -1204,12 +1207,11 @@ registerAction2(RepositorySortByDiscoveryTimeAction);
 registerAction2(RepositorySortByNameAction);
 registerAction2(RepositorySortByPathAction);
 
-abstract class RepositorySelectionModeAction extends ViewAction<SCMViewPane> {
+abstract class RepositorySelectionModeAction extends Action2 {
 	constructor(private readonly selectionMode: ISCMRepositorySelectionMode, title: string, order: number) {
 		super({
 			id: `workbench.scm.action.repositories.setSelectionMode.${selectionMode}`,
 			title,
-			viewId: VIEW_PANE_ID,
 			f1: false,
 			toggled: RepositoryContextKeys.RepositorySelectionMode.isEqualTo(selectionMode),
 			menu: [
@@ -1229,7 +1231,7 @@ abstract class RepositorySelectionModeAction extends ViewAction<SCMViewPane> {
 		});
 	}
 
-	override runInView(accessor: ServicesAccessor): void {
+	override run(accessor: ServicesAccessor): void {
 		accessor.get(ISCMViewService).toggleSelectionMode(this.selectionMode);
 	}
 }

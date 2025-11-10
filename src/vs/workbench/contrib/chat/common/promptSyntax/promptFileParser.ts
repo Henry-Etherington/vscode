@@ -10,6 +10,8 @@ import { URI } from '../../../../../base/common/uri.js';
 import { parse, YamlNode, YamlParseError, Position as YamlPosition } from '../../../../../base/common/yaml.js';
 import { Range } from '../../../../../editor/common/core/range.js';
 
+export const PROMPT_NAME_REGEXP = /^[\p{L}\d_\-\.]+$/u;
+
 export class PromptFileParser {
 	constructor() {
 	}
@@ -78,6 +80,11 @@ export namespace PromptHeaderAttributes {
 
 export namespace GithubPromptHeaderAttributes {
 	export const mcpServers = 'mcp-servers';
+}
+
+export enum Target {
+	VSCode = 'vscode',
+	GitHubCopilot = 'github-copilot'
 }
 
 export class PromptHeader {
@@ -150,6 +157,14 @@ export class PromptHeader {
 		const attribute = this._parsedHeader.attributes.find(attr => attr.key === key);
 		if (attribute?.value.type === 'string') {
 			return attribute.value.value;
+		}
+		return undefined;
+	}
+
+	public get name(): string | undefined {
+		const name = this.getStringAttribute(PromptHeaderAttributes.name);
+		if (name && PROMPT_NAME_REGEXP.test(name)) {
+			return name;
 		}
 		return undefined;
 	}
