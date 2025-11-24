@@ -3,16 +3,13 @@ from tkinter import messagebox
 import random
 import time
 import os
-
-from login_Window import LoginWindow
+import math
 
 class FactorySimulation:
     def __init__(self, root):
         self.root = root
         self.root.title("Autodesk: Factory") 
         self.warehouse_full_notified = False
-
-         # Window bar title
 
         # GUI size and position
         width, height = 900, 700
@@ -25,9 +22,8 @@ class FactorySimulation:
         root.resizable(False, False)
 
         # --- Factory Config ---
-        self.max_products = 98 # maximum products in warehouse since warehouse has limited space.
+        self.max_products = 98  # maximum products in warehouse
         self.product_count = 0
-        self.warehouse_full_shown = False
         self.products = []  # list of tuples: (number, color, timestamp)
         self.product_colors = ["red", "blue", "yellow"]
         self.product_catalog = {"red": "Cooling Unit", 
@@ -110,14 +106,13 @@ class FactorySimulation:
 
     # --- Produce Product ---
     def produce_product(self):
-        
         """Produce a product and display it as a colored square on the canvas."""
         if self.product_count >= self.max_products:
-           if not self.warehouse_full_notified: 
-              messagebox.showinfo("Warehouse Full", "Maximum warehouse capacity reached. Stopping production!")
-              self.warehouse_full_notified = True
-              self.production_running = False
-           return
+            if not getattr(self, "warehouse_full_notified", False): 
+                messagebox.showinfo("Warehouse Full", "Maximum warehouse capacity reached. Stopping production!")
+                self.warehouse_full_notified = True
+                self.production_running = False
+            return
 
         color = random.choice(self.product_colors)
         timestamp = time.time()
@@ -223,83 +218,81 @@ class FactorySimulation:
 
     # --- Show Information (Histogram + Pie Chart) ---
     def show_information(self):
-     if not self.products:
-        messagebox.showinfo("No Data", "No products have been produced yet.")
-        return
+        if not self.products:
+            messagebox.showinfo("No Data", "No products have been produced yet.")
+            return
 
-     window = tk.Toplevel(self.root)
-     window.title("Production Information (Live)")
-     window.geometry("700x500")  # fixed size
-     window.resizable(False, False)  # prevent resizing
-     window.configure(bg="white")
+        window = tk.Toplevel(self.root)
+        window.title("Production Information (Live)")
+        window.geometry("700x500")  # fixed size
+        window.resizable(False, False)  # prevent resizing
+        window.configure(bg="white")
 
-     # Canvas for charts
-     canvas = tk.Canvas(window, width=680, height=400, bg="#f8f8f8")
-     canvas.pack(padx=10, pady=10)
+        # Canvas for charts
+        canvas = tk.Canvas(window, width=680, height=400, bg="#f8f8f8")
+        canvas.pack(padx=10, pady=10)
 
-     canvas.create_text(340, 20, text="Histogram & Pie Chart", font=("Arial", 16, "bold"))
+        canvas.create_text(340, 20, text="Histogram & Pie Chart", font=("Arial", 16, "bold"))
 
-     def update_charts():
-        canvas.delete("chart")
-        counts = {}
-        for _, color, _ in self.products:
-            counts[color] = counts.get(color, 0) + 1
-        total = sum(counts.values())
+        def update_charts():
+            canvas.delete("chart")
+            counts = {}
+            for _, color, _ in self.products:
+                counts[color] = counts.get(color, 0) + 1
+            total = sum(counts.values())
 
-        # Histogram
-        bar_width = 50
-        spacing = 40
-        max_height = 400
-        start_x = 50
-        base_y = 300
+            # Histogram
+            bar_width = 50
+            spacing = 40
+            max_height = 400
+            start_x = 50
+            base_y = 300
 
-        for i, color in enumerate(self.product_colors):
-            count = counts.get(color, 0)
-            height = (count / max(total, 1)) * max_height
-            x1 = start_x + i*(bar_width + spacing)
-            y1 = base_y - height
-            x2 = x1 + bar_width
-            y2 = base_y
+            for i, color in enumerate(self.product_colors):
+                count = counts.get(color, 0)
+                height = (count / max(total, 1)) * max_height
+                x1 = start_x + i*(bar_width + spacing)
+                y1 = base_y - height
+                x2 = x1 + bar_width
+                y2 = base_y
 
-            canvas.create_rectangle(x1, y1, x2, y2, fill=color, tags="chart")
-            canvas.create_text((x1+x2)/2, y1-10, text=f"{count}", font=("Arial", 10), tags="chart")
-            canvas.create_text((x1+x2)/2, base_y+15, text=self.product_catalog[color], font=("Arial", 10), tags="chart")
+                canvas.create_rectangle(x1, y1, x2, y2, fill=color, tags="chart")
+                canvas.create_text((x1+x2)/2, y1-10, text=f"{count}", font=("Arial", 10), tags="chart")
+                canvas.create_text((x1+x2)/2, base_y+15, text=self.product_catalog[color], font=("Arial", 10), tags="chart")
 
-        # Pie chart
-        pie_x, pie_y, pie_radius = 520, 120, 80
-        start_angle = 0
+            # Pie chart
+            pie_x, pie_y, pie_radius = 520, 120, 80
+            start_angle = 0
 
-        for color in self.product_colors:
-            count = counts.get(color, 0)
-            extent = (count / max(total, 1)) * 360
-            if extent > 0:
-                canvas.create_arc(pie_x - pie_radius, pie_y - pie_radius,
-                                  pie_x + pie_radius, pie_y + pie_radius,
-                                  start=start_angle, extent=extent, fill=color, tags="chart")
-                # display product name + count
-                import math
-                mid_angle = start_angle + extent / 2
-                rad = math.radians(mid_angle)
-                text_x = pie_x + 0.6*pie_radius * math.cos(rad)
-                text_y = pie_y - 0.6*pie_radius * math.sin(rad)
-                canvas.create_text(text_x, text_y, text=f"{self.product_catalog[color]} ({count})",
-                                   font=("Arial", 9), tags="chart")
-                start_angle += extent
+            for color in self.product_colors:
+                count = counts.get(color, 0)
+                extent = (count / max(total, 1)) * 360
+                if extent > 0:
+                    canvas.create_arc(pie_x - pie_radius, pie_y - pie_radius,
+                                      pie_x + pie_radius, pie_y + pie_radius,
+                                      start=start_angle, extent=extent, fill=color, tags="chart")
+                    # display product name + count
+                    mid_angle = start_angle + extent / 2
+                    rad = math.radians(mid_angle)
+                    text_x = pie_x + 0.6*pie_radius * math.cos(rad)
+                    text_y = pie_y - 0.6*pie_radius * math.sin(rad)
+                    canvas.create_text(text_x, text_y, text=f"{self.product_catalog[color]} ({count})",
+                                       font=("Arial", 9), tags="chart")
+                    start_angle += extent
 
-        window.after(1000, update_charts)
+            window.after(1000, update_charts)
 
-     update_charts()
+        update_charts()
 
-     # Close button inside window
-     close_btn = tk.Button(window, text="Close",
-                          bg="#B22222", fg="white",
-                          font=("Arial", 14, "bold"),
-                          width=20, height=2,
-                          command=window.destroy)
-     close_btn.pack(pady=5)
+        # Close button inside window
+        close_btn = tk.Button(window, text="Close",
+                              bg="#B22222", fg="white",
+                              font=("Arial", 14, "bold"),
+                              width=20, height=2,
+                              command=window.destroy)
+        close_btn.pack(pady=5)
 
-
-    # --- Show All Saved Products ---
+    # --- Show All Saved Products (GUI Version) ---
     def show_all_saved_products(self):
         folder_path = os.path.dirname(os.path.abspath(__file__))
         filename = os.path.join(folder_path, "factory_simulation_products.txt")
@@ -314,8 +307,9 @@ class FactorySimulation:
 
             window = tk.Toplevel(self.root)
             window.title("All Saved Products")
-            window.geometry("600x400")
+            window.geometry("700x500")
             window.configure(bg="white")
+            window.resizable(False, False)
 
             text_area = tk.Text(window, wrap="word", font=("Arial", 12), bg="#f8f8f8", fg="black")
             text_area.pack(expand=True, fill="both", padx=10, pady=10)
@@ -323,7 +317,9 @@ class FactorySimulation:
             text_area.config(state="disabled")
 
             close_btn = tk.Button(window, text="Close", bg="#B22222", fg="white",
-                                  font=("Arial", 12, "bold"), command=window.destroy)
+                                  font=("Arial", 14, "bold"),
+                                  width=20, height=2,
+                                  command=window.destroy)
             close_btn.pack(pady=5)
 
         except Exception as e:
@@ -337,5 +333,5 @@ class FactorySimulation:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    LoginWindow(root)  # show login window first
+    app = FactorySimulation(root)
     root.mainloop()
